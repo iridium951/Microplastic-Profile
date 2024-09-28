@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+	<title>three.js webgl - generative - analysis - microplastic</title>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	<link type="text/css" rel="stylesheet" href="vendor/main.css">
+
+	<script async src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"></script>
+
+	<script type="importmap">
+			{
+				"imports": {
+					"three": "./three.js/build/three.module.js",
+					"three/addons/": "./three.js/examples/jsm/"
+				}
+			}
+	</script>
+
+	<script type="text/javascript" src="webm-writer-0.3.0.js"></script>
+
+	<script src="CCapture.all.min.js"></script>
+
+	<script src="./index.html"></script>
+
+	<script>
+		var capturer = new CCapture({ format: 'webm', framerate: 30, verbose: false });
+	</script>
+
+
+	<script type="module">
+
+		import * as THREE from 'three';
+
+		import Stats from 'three/addons/libs/stats.module.js';
+
+		import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+		import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+		import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+		import { BloomPass } from 'three/addons/postprocessing/BloomPass.js';
+		import { FilmPass } from 'three/addons/postprocessing/FilmPass.js';
+		import { FocusShader } from 'three/addons/shaders/FocusShader.js';
+		import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+
+
+		//////////////////// 
+
+		let phaseGrid = true;
+		let phaseBody = false;
+		let phasePlastic = false;
+		let phaseBodyDown = false;
+
+		let phaseGridTime = 1.5;
+		let phaseBodyTime = 8.5;
+		let phasePlasticTime = 12;
+
+		const delayX = Math.floor(200 + 200);
+		const startX = Math.floor(400 + 200);
+
+		////////////////////
+
+		let startTime;
+
+		////////////////////
+
+
+		THREE.ColorManagement.enabled = false; // TODO: Consider enabling color management.
+
+		let camera, scene, renderer, mesh;
+		let geometry;
+
+		let parent3d;
+
+		const bmeshes = [];
+		const pmeshes = [];
+		const clonemeshes = [];
+
+		let toSpacePlastic = true;
+		let toBodyPlastic = false;
+		let toFloorMesh = true;
+
+		let composer, effectFocus;
+
+		const clock = new THREE.Clock();
+
+		//let stats;
+		let renderStarted = false;
+		let captureStarted = false;
+		let captureSaved = false;
+
+		const materials = [];
+		let parameters = [];
+		const vertices = [];
+
+		let dpx = [];
+		let dpy = [];
+		let dpz = [];
+
+		init();
+		animate();
+
+
+
+		function buildModel(scene) {
+			const modelsLoader = new OBJLoader();
+			modelsLoader.load('./smplxModels/male_model_1.obj', function (model) {
+			// modelsLoader.load('./vendor/examples/models/obj/sh1/female_model_1.obj', function (model) {
+				console.log("loaded model");
+				const positions = combineBuffer(model, 'position');
+				createModelMesh(positions, scene, 800, 0, -600, 0, 0xFFFFFF);
+				// createMesh( positions, scene, 4.05, 500, - 350, 0, 0xff5522 );
+				// createMesh( positions, scene, 4.05, - 250, - 350, 1500, 0xff9922 );
+				// createMesh( positions, scene, 4.05, - 250, - 350, - 1500, 0xff99ff );
+			});
+
+			// loader.load( './vendor/examples/models/obj/sh1/000.obj', function ( object ) {
+
+			// 	object.scale.set(100, 100, 100);
+
+			// 	const positions = combineBuffer( object, 'position' );
+
+			// 	createMesh( positions, scene, 4.05, - 1000, - 350, 0, 0xffdd44 );
+			// 	createMesh( positions, scene, 4.05, 0, - 350, 0, 0xffffff );
+			// 	createMesh( positions, scene, 4.05, 1000, - 350, 400, 0xff4422 );
+			// 	createMesh( positions, scene, 4.05, 250, - 350, 1500, 0xff9955 );
+			// 	createMesh( positions, scene, 4.05, 250, - 350, 2500, 0xff77dd );
+
+			// } );
+
+		}
+
+		function buildGrid() {
+			let gridColor = 0xE8E8E8;
+			let gridSize = 18;
+			const grid = new THREE.Points(new THREE.PlaneGeometry(20000, 20000, 64, 64), new THREE.PointsMaterial({ color: gridColor, size: gridSize }));
+			grid.position.y = -600;
+			// grid.position.y = 0;
+			grid.rotation.x = - Math.PI / 2;
+			return grid;
+		}
+
+		function init() {
+
+			const container = document.querySelector('#container');
+
+			scene = new THREE.Scene();
+			scene.background = new THREE.Color(0x000104);
+			// no fog
+			// scene.fog = new THREE.FogExp2(0x000104, 0.0000675);
+
+			camera = new THREE.PerspectiveCamera(20, window.innerWidth / window.innerHeight, 1, 50000);
+			camera.position.set(0, 700, 7000);
+			camera.lookAt(scene.position);
+
+			renderer = new THREE.WebGLRenderer();
+			renderer.setPixelRatio(window.devicePixelRatio);
+			//renderer.setSize(1080, 1920);
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			renderer.autoClear = false;
+			container.appendChild(renderer.domElement);
+
+			parent3d = new THREE.Object3D();
+			scene.add(parent3d);
+
+
+			const grid = buildGrid();
+			parent3d.add(grid);
+
+			// buildModel(scene);
+
+
+			// postprocessing
+
+			const renderModel = new RenderPass(scene, camera);
+			const effectBloom = new BloomPass(0.25);
+			//const effectFilm = new FilmPass(0.5, 0.5, 1448, false);
+
+			effectFocus = new ShaderPass(FocusShader);
+
+			effectFocus.uniforms['screenWidth'].value = window.innerWidth * window.devicePixelRatio;
+			effectFocus.uniforms['screenHeight'].value = window.innerHeight * window.devicePixelRatio;
+
+			composer = new EffectComposer(renderer);
+
+			composer.addPass(renderModel);
+			composer.addPass(effectBloom);
+						//composer.addPass(effectFilm);
+			composer.addPass(effectFocus);
+
+			//stats
+			//stats = new Stats();
+			//container.appendChild(stats.dom);
+
+			window.addEventListener('resize', onWindowResize);
+
+		}
+
+		function fillWithPoints(count) {
+
+			var dummyTarget = new THREE.Vector3(); // to prevent logging of warnings from ray.at() method
+
+			var ray = new THREE.Ray()
+
+			var size = new THREE.Vector3();
+			geometry.computeBoundingBox();
+			let bbox = geometry.boundingBox;
+
+			let points = [];
+
+			var dir = new THREE.Vector3(1, 1, 1).normalize();
+
+			for (let i = 0; i < count; i++) {
+				let p = setRandomVector(bbox.min, bbox.max);
+				points.push(p);
+			}
+
+			// let counter = 0;
+			// while (counter < count) {
+			// 	let v = new THREE.Vector3(
+			// 		THREE.Math.randFloat(bbox.min.x, bbox.max.x),
+			// 		THREE.Math.randFloat(bbox.min.y, bbox.max.y),
+			// 		THREE.Math.randFloat(bbox.min.z, bbox.max.z)
+			// 	);
+			// 	if (isInside(v)) {
+			// 		points.push(v);
+			// 		counter++;
+			// 	}
+			// }
+
+			function randFloat(low, high) {
+
+				return low + Math.random() * (high - low);
+
+			}
+
+			function setRandomVector(min, max) {
+				let v = new THREE.Vector3(
+					randFloat(min.x, max.x),
+					randFloat(min.y, max.y),
+					randFloat(min.z, max.z)
+				);
+				if (!isInside(v)) { return setRandomVector(min, max); }
+				return v;
+			}
+
+			function isInside(v) {
+
+				ray.set(v, dir);
+				let counter = 0;
+
+				let pos = geometry.attributes.position;
+				let faces = pos.count / 3;
+
+				let vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3();
+				for (let i = 0; i < faces; i++) {
+					vA.fromBufferAttribute(pos, i * 3 + 0);
+					vB.fromBufferAttribute(pos, i * 3 + 1);
+					vC.fromBufferAttribute(pos, i * 3 + 2);
+					if (ray.intersectTriangle(vA, vB, vC, false, dummyTarget)) counter++;
+				}
+
+				return counter % 2 == 1;
+			}
+			console.log(points.length);
+			return new THREE.BufferGeometry().setFromPoints(points);
+		}
+
+
+		function onWindowResize() {
+
+			camera.aspect = window.innerWidth / window.innerHeight;
+			camera.updateProjectionMatrix();
+
+			camera.lookAt(scene.position);
+
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			composer.setSize(window.innerWidth, window.innerHeight);
+
+			effectFocus.uniforms['screenWidth'].value = window.innerWidth * window.devicePixelRatio;
+			effectFocus.uniforms['screenHeight'].value = window.innerHeight * window.devicePixelRatio;
+
+		}
+
+		function combineBuffer(model, bufferName) {
+
+			let count = 0;
+
+			model.traverse(function (child) {
+
+				if (child.isMesh) {
+
+					const buffer = child.geometry.attributes[bufferName];
+
+					count += buffer.array.length;
+
+				}
+
+			});
+
+			const combined = new Float32Array(count);
+
+			let offset = 0;
+
+			model.traverse(function (child) {
+
+				if (child.isMesh) {
+
+					const buffer = child.geometry.attributes[bufferName];
+
+					combined.set(buffer.array, offset);
+					offset += buffer.array.length;
+
+				}
+
+			});
+
+			return new THREE.BufferAttribute(combined, 3);
+
+		}
+
+		function createModelMesh(positions, scene, scale, x, y, z, color) {
+
+			geometry = new THREE.BufferGeometry();
+			geometry.setAttribute('position', positions.clone());
+			geometry.setAttribute('initialPosition', positions.clone());
+			geometry.translate(0, 0.65, 0);
+
+			geometry.attributes.position.setUsage(THREE.DynamicDrawUsage);
+
+			const clones = [
+
+				// [ 6000, 0, - 4000 ],
+				// [ 5000, 0, 0 ],
+				// [ 1000, 0, 5000 ],
+				// [ 1000, 0, - 5000 ],
+				// [ 4000, 0, 2000 ],
+				// [ - 4000, 0, 1000 ],
+				// [ - 5000, 0, - 5000 ],
+
+				[0, 0, 0]
+
+			];
+
+
+			// const delayX = Math.floor(200 + 200 * Math.random());
+			// const startX = Math.floor(100 + 200 * Math.random());
+
+			for (let i = 0; i < clones.length; i++) {
+
+				const c = (i < clones.length - 1) ? 0xFFFFFF : color;
+
+				// mesh = new THREE.Points( geometry, new THREE.PointsMaterial( { size: 30, color: c } ) );
+				if (i !== 0) {
+					mesh = new THREE.Points(geometry, new THREE.PointsMaterial({ size: 25, color: 0xFFFFFF }));
+
+				} else {
+					mesh = new THREE.Points(geometry, new THREE.PointsMaterial({ size: 15, color: 0xFFFFFF }));
+				}
+
+
+				mesh.geometry.setAttribute('initialPosition', mesh.geometry.getAttribute('position').clone());
+
+
+				mesh.scale.x = mesh.scale.y = mesh.scale.z = scale;
+
+				mesh.position.x = x + clones[i][0];
+				mesh.position.y = y + clones[i][1];
+				mesh.position.z = z + clones[i][2];
+
+				parent3d.add(mesh);
+
+				let meshRotationSpeed = 0.5 + Math.random();
+				clonemeshes.push({ mesh: mesh, speed: meshRotationSpeed });
+
+
+				// meshes.push( {
+				// 	mesh: mesh, verticesDown: 0, verticesUp: 0, direction: 0, speed: 15, delay: Math.floor( 200 + 200 * Math.random() ),
+				// 	start: Math.floor( 100 + 200 * Math.random() ),
+				// } );
+				bmeshes.push({
+					mesh: mesh, verticesDown: 0, verticesUp: 0, direction: 0, speed: 15, delay: delayX,
+					start: startX,
+				});
+
+			}
+
+			// ###############
+
+			// mesh2 = new THREE.Points( geometry, new THREE.PointsMaterial( { size: 5, color: 0x252525 } ) );
+			// mesh2.scale.x = mesh2.scale.y = mesh2.scale.z = scale;
+
+			// mesh2.position.x = x + 0.001;
+			// mesh2.position.y = y + 0.001;
+			// mesh2.position.z = z + 0.001;
+
+			// parent.add( mesh2 );
+
+			// clonemeshes.push( { mesh: mesh2, speed: 0.5 + Math.random() } );
+
+			// meshes.push( {
+			// 	mesh: mesh2, verticesDown: 0, verticesUp: 0, direction: 0, speed: 15, delay: Math.floor( 200 + 200 * Math.random() ),
+			// 	start: Math.floor( 10 + 20 * Math.random() ),
+			// } );
+
+		}
+
+		function createPlasticFill(mesh) {
+			let plasticSize = 50;
+			let plasticColor = 0xae6be3;
+			let plasticCount = 250;
+			var pointsGeom = fillWithPoints(plasticCount);
+			var pointsMat = new THREE.PointsMaterial({ color: plasticColor, size: plasticSize });
+			var points = new THREE.Points(pointsGeom, pointsMat);
+			points.geometry.setAttribute('initialPosition', points.geometry.getAttribute('position').clone());
+			mesh.add(points);
+			pmeshes.push({
+				mesh: points, verticesDown: 0, verticesUp: 0, direction: 0, speed: 15, delay: delayX,
+				start: startX,
+			});
+
+		}
+
+
+		function animate() {
+
+			requestAnimationFrame(animate);
+			if (renderStarted) {
+				render();
+
+
+				if (captureStarted === false) {
+					console.log("captureStarted start");
+					 		//capturer.capture(renderer.domElement);
+					 //capturer.start();
+					 //captureStarted = true;
+				}
+
+				if (captureStarted) {
+					 capturer.capture(renderer.domElement);
+				}
+				//stats.update();
+
+			}
+
+		}
+
+		function render() {
+
+			let delta = 10 * clock.getDelta();
+
+			delta = delta < 2 ? delta : 2;
+
+			parent3d.rotation.y += - 0.02 * delta;
+
+			const timeNow = Date.now();
+
+			// console.log("timeNow - startTime = " + timeNow - startTime);
+			if (phaseGrid && timeNow - startTime < phaseGridTime * 1000) {
+				composer.render(0.01);
+				return;
+			}
+
+			if (phaseGrid) {
+				phaseGrid = false;
+				phaseBody = true;
+				startTime = Date.now();
+				buildModel(scene);
+			}
+
+			if (phaseBody && timeNow - startTime > phaseBodyTime * 1000) {
+				phaseBody = false;
+				phasePlastic = true;
+				startTime = Date.now();
+				createPlasticFill(clonemeshes[0].mesh);
+			}
+
+			if (phasePlastic && timeNow - startTime > phasePlasticTime * 1000) {
+				phasePlastic = false;
+				toBodyPlastic = true;
+				phaseBodyDown = true;
+				startTime = Date.now();
+			}
+
+
+			for (let j = 0; j < clonemeshes.length; j++) {
+				const cm = clonemeshes[j];
+				cm.mesh.rotation.y += - 0.1 * delta * cm.speed;
+			}
+
+
+			// for (let j = 0; j < meshes.length; j++) {
+
+			// const data = meshes[j];
+			// const positions = data.mesh.geometry.attributes.position;
+			// const initialPositions = data.mesh.geometry.attributes.initialPosition;
+
+			// const count = positions.count;
+
+			// if (data.start > 0) {
+
+			// 	data.start -= 1;
+
+			// } else {
+
+			// 	if (data.direction === 0) {
+
+			// 		data.direction = - 1;
+
+			// 	}
+
+			// }
+
+			// body points --------------------------------------------------------------------------------------------				
+
+			if (phaseBodyDown) {
+
+				const data = bmeshes[0];
+				const positions = data.mesh.geometry.attributes.position;
+				const count = positions.count;
+
+				for (let i = 0; i < count; i++) {
+
+					const px = positions.getX(i);
+					const py = positions.getY(i);
+					const pz = positions.getZ(i);
+
+					// falling down
+					// if (data.direction < 0) {
+
+						// if ( py > 0 ) {
+						if (py > 0) {
+
+							positions.setXYZ(
+								i,
+								// px + 1.5 * ( 0.50 - Math.random() ) * data.speed * delta,
+								// py + 3.0 * ( 0.25 - Math.random() ) * data.speed * delta,
+								// pz + 1.5 * ( 0.50 - Math.random() ) * data.speed * delta
+
+								// down more or less
+								px + 0.0005 * (0.50 - Math.random()) * data.speed * delta,
+								py + 0.015 * (0.25 - Math.random()) * data.speed * delta,
+								pz + 0.0005 * (0.50 - Math.random()) * data.speed * delta
+
+								// px + 0.0015 * ( 1 ) * data.speed * delta,
+								// py + 0.0060 * ( 1 ) * data.speed * delta,
+								// pz + 0.0015 * ( 1 ) * data.speed * delta
+
+							);
+
+							// let toFloorMesh = true;
+
+						} 
+						// else {
+
+						// 	data.verticesDown += 0.001;
+						// 	// data.verticesDown += 1;
+
+						// }
+
+					// }
+				}
+
+
+			}
+
+			// plastic points --------------------------------------------------------------------------------------------
+
+			// for (let k = 0; k < pmeshes.length; k++) {
+
+			// 	const data = pmeshes[k];
+			// 	const positions = data.mesh.geometry.attributes.position;
+			// 	const initialPositions = data.mesh.geometry.attributes.initialPosition;
+
+			// 	const count = positions.count;
+
+			// 	if (data.start > 0) {
+			// 		data.start -= 1;
+			// 	} else {
+			// 		if (data.direction === 0) {
+			// 			data.direction = - 1;
+			// 		}
+			// 	}
+
+			// 	for (let i = 0; i < count; i++) {
+
+			// 		const px = positions.getX(i);
+			// 		const py = positions.getY(i);
+			// 		const pz = positions.getZ(i);
+
+			// 		const ipy = initialPositions.getY(i);
+
+
+			// 		if (toFloorMesh) {
+
+			// 			console.log("py/ipy = " + i + " : " + py + "/" + ipy);
+
+			// 			positions.setXYZ(
+			// 				i,
+			// 				px,
+			// 				0,
+			// 				pz
+			// 			);
+			// 		} else {
+
+			// 			if (py < initialPositions.getY(i)) {
+
+			// 				positions.setXYZ(
+			// 					i,
+			// 					px,
+			// 					// py + 0.001,
+			// 					// py + 0.0060 * (Math.random() * 0.1 - 0.0025) * data.speed * delta,
+			// 					py + 0.0015 * data.speed * delta,
+			// 					pz
+			// 				);
+
+			// 			}
+
+			// 		}
+
+
+			// 	}
+
+			// 	if (toFloorMesh) {
+			// 		toFloorMesh = false;
+			// 	}
+
+			// 	positions.needsUpdate = true;
+
+			// }
+
+
+			// -------------------------------------------------------------------------------------------------------------------
+
+			// all vertices down
+			// if (data.verticesDown >= count) {
+
+			// 	if (data.delay <= 0) {
+
+			// 		data.direction = 1;
+			// 		data.speed = 5;
+			// 		data.verticesDown = 0;
+			// 		data.delay = 320;
+
+			// 	} else {
+
+			// 		data.delay -= 1;
+
+			// 	}
+
+			// }
+
+			// all vertices up
+			// if (data.verticesUp >= count) {
+
+			// 	if (data.delay <= 0) {
+
+			// 		data.direction = - 1;
+			// 		data.speed = 15;
+			// 		data.verticesUp = 0;
+			// 		data.delay = 120;
+
+			// 	} else {
+
+			// 		data.delay -= 1;
+
+			// 	}
+
+			// }
+
+			// positions.needsUpdate = true;
+
+			// }
+
+
+			// #### body ################################################################################
+
+
+			for (let j = 0; j < bmeshes.length; j++) {
+
+				const data = bmeshes[j];
+				const positions = data.mesh.geometry.attributes.position;
+				const initialPositions = data.mesh.geometry.attributes.initialPosition;
+
+				const count = positions.count;
+
+				if (data.start > 0) {
+					data.start -= 1;
+				} else {
+					if (data.direction === 0) {
+						data.direction = - 1;
+					}
+				}
+
+
+				// let minPy = 1000;
+
+				for (let i = 0; i < count; i++) {
+
+					const px = positions.getX(i);
+					const py = positions.getY(i);
+					const pz = positions.getZ(i);
+
+					const ipy = initialPositions.getY(i);
+
+
+					if (toFloorMesh) {
+
+
+						positions.setXYZ(
+							i,
+							px,
+							0,
+							pz
+						);
+					} else {
+
+						if (py < initialPositions.getY(i)) {
+
+							positions.setXYZ(
+								i,
+								px,
+								py + 0.0015 * data.speed * delta,
+								pz
+							);
+
+						}
+
+					}
+				}
+
+				if (toFloorMesh) {
+					toFloorMesh = false;
+				}
+
+				positions.needsUpdate = true;
+
+			}
+
+
+			// #### plastic ################################################################################
+
+
+
+			for (let j = 0; j < pmeshes.length; j++) {
+
+				const data = pmeshes[j];
+				const positions = data.mesh.geometry.attributes.position;
+				const initialPositions = data.mesh.geometry.attributes.initialPosition;
+
+				const count = positions.count;
+
+				if (data.start > 0) {
+					data.start -= 1;
+				} else {
+					if (data.direction === 0) {
+						data.direction = - 1;
+					}
+				}
+
+				for (let i = 0; i < count; i++) {
+
+					const ipx = initialPositions.getX(i);
+					const ipy = initialPositions.getY(i);
+					const ipz = initialPositions.getZ(i);
+
+
+					if (toSpacePlastic) {
+
+						// console.log("py/ipy = " + i + " : " + py + "/" + ipy);
+
+						const spaceScale = 10;
+						let spaceX = ipx + (Math.random() - 0.5) * spaceScale;
+						let spaceY = ipy + (Math.random()) * spaceScale / 4;
+						let spaceZ = ipz + (Math.random() - 0.5) * spaceScale;
+
+						positions.setXYZ(
+							i,
+							spaceX,
+							spaceY,
+							spaceZ
+						);
+
+						let backflyStep = 1 / 300;
+
+						const px = positions.getX(i);
+						const py = positions.getY(i);
+						const pz = positions.getZ(i);
+
+						if (Math.sign(px) === Math.sign(ipx)) {
+							dpx.push(Math.abs(px - ipx) * backflyStep);
+						} else {
+							dpx.push(Math.abs(px + ipx) * backflyStep);
+						}
+						if (Math.sign(py) === Math.sign(ipy)) {
+							dpy.push(Math.abs(py - ipy) * backflyStep);
+						} else {
+							dpy.push(Math.abs(py + ipy) * backflyStep);
+						}
+						if (Math.sign(pz) === Math.sign(ipz)) {
+							dpz.push(Math.abs(pz - ipz) * backflyStep);
+						} else {
+							dpz.push(Math.abs(pz + ipz) * backflyStep);
+						}
+
+					} else if (toBodyPlastic) {
+
+						positions.setXYZ(
+							i,
+							ipx,
+							ipy,
+							ipz
+						);						
+
+					} else {
+
+
+						const px = positions.getX(i);
+						const py = positions.getY(i);
+						const pz = positions.getZ(i);
+
+						let newPx;
+						if (px > ipx) {
+							newPx = px - dpx[i];
+						} else {
+							newPx = px + dpx[i];
+						}
+						let newPy;
+						if (py > ipy) {
+							newPy = py - dpy[i];
+						} else {
+							newPy = py + dpy[i];
+						}
+						let newPz;
+						if (pz > ipz) {
+							newPz = pz - dpz[i];
+						} else {
+							newPz = pz + dpz[i];
+						}
+
+						positions.setXYZ(
+							i,
+							newPx,
+							newPy,
+							newPz,
+						);
+
+						// positions.setXYZ(
+						// 		i,
+						// 		px / spaceScale / 30,
+						// 		px / spaceScale / 30,
+						// 		px / spaceScale / 30,
+						// );
+
+					}
+
+					// falling down
+					// if (data.direction < 0) {
+
+					// 	// if ( py > 0 ) {
+					// 	if (py > 0) {
+
+					// 		positions.setXYZ(
+					// 			i,
+					// 			// px + 1.5 * ( 0.50 - Math.random() ) * data.speed * delta,
+					// 			// py + 3.0 * ( 0.25 - Math.random() ) * data.speed * delta,
+					// 			// pz + 1.5 * ( 0.50 - Math.random() ) * data.speed * delta
+
+					// 			// down more or less
+					// 			px + 0.0015 * (0.50 - Math.random()) * data.speed * delta,
+					// 			py + 0.0060 * (0.25 - Math.random()) * data.speed * delta,
+					// 			pz + 0.0015 * (0.50 - Math.random()) * data.speed * delta
+
+					// 			// px + 0.0015 * ( 1 ) * data.speed * delta,
+					// 			// py + 0.0060 * ( 1 ) * data.speed * delta,
+					// 			// pz + 0.0015 * ( 1 ) * data.speed * delta
+
+					// 		);
+
+					// 	} else {
+
+					// 		data.verticesDown += 0.001;
+					// 		// data.verticesDown += 1;
+
+					// 	}
+
+				}
+
+				if (toSpacePlastic) {
+					toSpacePlastic = false;
+				}
+
+				if(toBodyPlastic) {
+					toBodyPlastic = false;
+				}
+				
+
+				positions.needsUpdate = true;
+
+			}
+
+
+
+			// ####################################################################################
+
+			const time = Date.now() * 0.00005;
+
+			// for (let i = 0; i < scene.children.length; i++) {
+
+			// 	const dataSpeed = 7;
+
+			// 	const object = scene.children[i];
+
+			// 	if (object instanceof THREE.Points) {
+
+			// 		object.rotation.y = time * (i < 4 ? i + 1 : - (i + 1));
+
+			// 		// const px = object.position.getX();
+			// 		// const py = object.position.getY();
+			// 		// const pz = object.position.getZ();
+
+			// 		// object.position.setXYZ(px, py + 0.0060 * (0.25 - Math.random()) * dataSpeed * delta, pz);
+
+
+			// 	}
+
+			// }
+
+			composer.render(0.01);
+
+		}
+
+		addEventListener("click", (event) => {
+
+			if (renderStarted === false) {
+				console.log("renderStarted true");
+				renderStarted = true;
+				startTime = Date.now();
+			} else if (captureSaved === false) {
+				console.log("captureSaved true");
+				captureSaved = true;
+				//capturer.stop();
+				//capturer.save();
+			} else {
+				console.log("click");
+			}
+
+		});
+
+
+	</script>
+
+
+</head>
+
+
+<body>
+
+	<div id="container">
+
+</body>
+
+</html>
